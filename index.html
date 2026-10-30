@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1721">
+  <meta name="description" content="Private, offline-first aquarium manager for Reef Command">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Reef Command</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="brandmark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M4 24c7-13 11-13 18 0s11 13 14 0M4 14c7-13 11-13 18 0s11 13 14 0" stroke="currentColor" fill="none" stroke-width="3" stroke-linecap="round"/></svg></div><div><b>REEF COMMAND</b><small>PRIVATE AQUARIUM MANAGER</small></div></div>
+    <div class="nav" id="desktopNav" aria-label="Main navigation"></div>
+    <div class="sidebarFoot"><div class="offlineDot"></div><div><b>Local-first storage</b><small id="saveStatus">Saved on this device</small></div></div>
+  </aside>
+  <div class="mainWrap">
+    <header class="topbar"><div class="eyebrow"><span class="tinyDot"></span> AQUARIUM OPERATIONS</div><div class="topbarRight"><span id="todayLabel"></span><button class="iconBtn" id="quickBackup" title="Download backup" aria-label="Download backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3"/></svg></button></div></header>
+    <main id="content" tabindex="-1"></main>
+  </div>
+  <nav class="mobileNav" id="mobileNav" aria-label="Main navigation"></nav>
+</div>
+<div id="modalHost"></div>
+<div id="toastHost" aria-live="polite" aria-atomic="true"></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+<script src="app.js" defer></script>
+</body>
+</html>
