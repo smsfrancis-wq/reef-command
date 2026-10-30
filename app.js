@@ -150,14 +150,51 @@ function chartTimeLabel(timestamp,span){
  return new Intl.DateTimeFormat('en-GB',opts).format(new Date(timestamp));
 }
 
+
+let chartPeriod='all',chartSource='all',chartStart='',chartEnd='',chartMarkers=true;
+const WATER_CHANGE_METRICS=new Set(['temperature','salinity','ph','alkalinity','calcium','magnesium','nitrate','phosphate','ammonia','nitrite','redox','conductivity']);
+function chartSelection(now=Date.now()){
+ let from=-Infinity,to=Infinity,error='';
+ if(chartPeriod==='custom'){
+  from=Date.parse(chartStart);to=Date.parse(chartEnd);
+  if(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)error='Choose a start date/time before the end date/time.';
+ }else if(chartPeriod!=='all'){
+  to=now;from=now-Number(chartPeriod)*86400000;
+ }
+ const data=error?[]:recordedReadings().filter(r=>r.type===metric&&r.value!==null&&Number.isFinite(Number(r.value))&&Number.isFinite(Date.parse(r.at))&&Date.parse(r.at)>=from&&Date.parse(r.at)<=to&&(chartSource==='all'||readingSource(r)===(chartSource==='manual'?'Manual':chartSource))).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
+ const first=Number.isFinite(from)?from:data.length?Date.parse(data[0].at):now-86400000;
+ const last=Number.isFinite(to)?to:data.length?Date.parse(data.at(-1).at):now;
+ return {data,first,last,error};
+}
+function chartWaterChanges(first,last){
+ if(!chartMarkers||!WATER_CHANGE_METRICS.has(metric))return [];
+ return db.activities.filter(a=>a.type==='Water change'&&a.date).map(a=>{
+  const dateOnly=/^\d{4}-\d{2}-\d{2}$/.test(a.date);
+  const start=Date.parse(dateOnly?a.date+'T00:00:00':a.date);
+  const end=dateOnly?new Date(new Date(start).getFullYear(),new Date(start).getMonth(),new Date(start).getDate()+1).getTime()-1:start;
+  return {...a,start,end,dateOnly};
+ }).filter(a=>Number.isFinite(a.start)&&a.end>=first&&a.start<=last).sort((a,b)=>a.start-b.start);
+}
+function changeChartWindow(factor=1,shift=0){
+ const {first,last}=chartSelection();
+ const width=Math.max(last-first,3600000),middle=(first+last)/2+width*shift;
+ const half=Math.max(15*60000,width*factor/2);
+ chartStart=localDateTime(new Date(middle-half));chartEnd=localDateTime(new Date(middle+half));chartPeriod='custom';render();
+}
+function chartControls(options){
+ const selectOptions=(pairs,current)=>pairs.map(([value,label])=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`).join('');
+ return `<div class="inlineControl" style="margin-bottom:12px;flex-wrap:wrap;gap:8px"><select id="chartMetric" class="select" aria-label="Chart parameter" style="width:auto;min-width:160px">${options}</select><select id="chartPeriod" class="select" aria-label="Chart date range" style="width:auto">${selectOptions([['1','Last 24 hours'],['7','Last 7 days'],['30','Last 30 days'],['all','All available'],['custom','Custom range']],chartPeriod)}</select><select id="chartSource" class="select" aria-label="Reading source" style="width:auto">${selectOptions([['all','All sources'],['manual','Manual'],['Aquarimate','Aquarimate'],['GHL','GHL']],chartSource)}</select>${WATER_CHANGE_METRICS.has(metric)?`<label class="smallMuted"><input id="chartMarkers" type="checkbox" ${chartMarkers?'checked':''}> Water changes</label>`:''}</div>${chartPeriod==='custom'?`<div class="inlineControl" style="margin-bottom:12px;flex-wrap:wrap;gap:8px"><label class="smallMuted">From <input id="chartStart" class="input" type="datetime-local" value="${attr(chartStart)}"></label><label class="smallMuted">To <input id="chartEnd" class="input" type="datetime-local" value="${attr(chartEnd)}"></label></div>`:''}<div class="inlineControl" style="margin-bottom:12px;flex-wrap:wrap;gap:8px">${button('Earlier','chart-earlier')}${button('Zoom in','chart-zoom-in')}${button('Zoom out','chart-zoom-out')}${button('Later','chart-later')}<span class="smallMuted">All available includes loaded GHL history (last 30 days).</span></div>`;
+}
+
 function chartPanel(){
  const options=Object.entries(TYPES).map(([k,t])=>`<option value="${k}" ${metric===k?'selected':''}>${esc(t.label)}</option>`).join('');
- const data=recordedReadings().filter(r=>r.type===metric&&r.value!==null&&Number.isFinite(Number(r.value))&&Number.isFinite(Date.parse(r.at))).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
+ const selection=chartSelection(),data=selection.data;
  const range=db.settings.targets?.[metric]||TYPES[metric];
  const hasRange=typeof range?.min==='number'&&typeof range?.max==='number'&&Number.isFinite(range.min)&&Number.isFinite(range.max)&&range.min<=range.max;
  const rangeLabel=hasRange?`${nfmt(range.min)}–${nfmt(range.max)} ${unit(metric)}`.trim():'Not set';
  let svg;
- if(!data.length)svg=empty('No readings to chart',`Log ${TYPES[metric].label.toLowerCase()} to create a trend.`);
+ if(selection.error)svg=empty('Check the date range',selection.error);
+ else if(!data.length)svg=empty('No readings to chart','No measurements match this parameter, date range and source. Try All available or All sources.');
  else{
   const W=660,H=260,L=65,R=18,T=16,B=40;
   const vals=data.map(r=>Number(r.value));
@@ -165,7 +202,7 @@ function chartPanel(){
   const mins=Math.min(...vals,...(hasRange?[range.min]:[])),maxs=Math.max(...vals,...(hasRange?[range.max]:[]));
 
   const axis=chartAxis(metric,mins,maxs),{low,high}=axis;
-  const first=Date.parse(data[0].at),last=Date.parse(data.at(-1).at),span=last-first;
+  const {first,last}=selection,span=last-first;
   const timeX=t=>L+(W-L-R)*(span?(t-first)/span:.5);
   const x=i=>timeX(Date.parse(data[i].at));
   const y=v=>T+(H-T-B)*(high-v)/(high-low);
@@ -173,11 +210,20 @@ function chartPanel(){
   const grid=axis.ticks.map(v=>`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="#27404d" stroke-dasharray="3 5"/><text class="yTick" x="${L-9}" y="${y(v)+4}" text-anchor="end" fill="#96abba" font-size="11">${axis.label(v)}</text>`).join('');
   const timeTicks=span?[0,1/3,2/3,1].map(f=>first+span*f):[first];
   const timeAxis=timeTicks.map((t,i)=>`<text class="xTick" x="${timeX(t)}" y="${H-12}" text-anchor="${timeTicks.length===1?'middle':i===0?'start':i===timeTicks.length-1?'end':'middle'}" fill="#96abba" font-size="11">${esc(chartTimeLabel(t,span))}</text>`).join('');
+
+  const changes=chartWaterChanges(first,last);
+  const waterMarkers=changes.map(a=>{
+   const left=timeX(Math.max(first,a.start)),right=timeX(Math.min(last,a.end));
+   const center=(left+right)/2;
+   const label=`Water change · ${formatDate(a.date)}${Number(a.litres)>0?' · '+nfmt(a.litres)+' L':''}${a.dateOnly?' · time not recorded':''}${a.notes?' · '+a.notes:''}`;
+   return `<g class="waterChangeMarker"><title>${esc(label)}</title>${a.dateOnly?`<rect x="${left}" y="${T}" width="${Math.max(1,right-left)}" height="${H-T-B}" fill="#74baff" fill-opacity="0.10"/>`:`<line x1="${left}" x2="${left}" y1="${T}" y2="${H-B}" stroke="#74baff" stroke-dasharray="3 4"/>`}<path d="M ${center-4} ${T+1} L ${center+4} ${T+1} L ${center} ${T+8} Z" fill="#74baff"/></g>`;
+  }).join('');
+  const changeList=changes.length?`<details style="margin-top:10px"><summary>${changes.length} water change${changes.length===1?'':'s'} in this view</summary>${changes.map(a=>`<div class="statRow"><div><b>${esc(formatDate(a.date))}${Number(a.litres)>0?' · '+nfmt(a.litres)+' L':''}</b><div class="meta">${a.dateOnly?'Time not recorded; the whole day is highlighted.':esc(new Date(a.start).toLocaleTimeString('en-GB'))}${a.notes?' · '+esc(a.notes):''}</div></div><button class="miniBtn" data-action="edit-activity" data-id="${attr(a.id)}">Edit</button></div>`).join('')}</details>`:'';
   const boundaries=hasRange?[...new Set([range.min,range.max])].map(v=>`<line class="targetBoundary" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="#8cdda2" stroke-width="1.2" stroke-dasharray="5 4"/>`).join(''):'';
   const band=hasRange?`<g class="targetRange"><title>Target range ${esc(rangeLabel)}</title>${range.max>range.min?`<rect class="targetBand" x="${L}" y="${y(range.max)}" width="${W-L-R}" height="${y(range.min)-y(range.max)}" fill="#70ce91" fill-opacity="0.14"/>`:''}${boundaries}</g>`:'';
-  svg=`<div class="chartCanvas"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(TYPES[metric].label)} trend chart with ${data.length} readings; target range ${esc(rangeLabel)}"><desc>Green shading shows the configured target range. Orange points are outside it.</desc>${grid}${band}<polyline points="${coords}" stroke="#54d9ce" fill="none" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round"/>${data.map((r,i)=>{const outside=hasRange&&(Number(r.value)<range.min||Number(r.value)>range.max);return `<circle cx="${x(i)}" cy="${y(Number(r.value))}" r="3.6" fill="${outside?'#ffb66e':'#a4fff5'}"><title>${nfmt(r.value)} ${esc(r.unit??unit(metric))} · ${esc(readingDate(r))}${outside?' · Outside target':''}</title></circle>`}).join('')}${timeAxis}</svg></div><div class="chartCaption">${esc(readingDate(data[0]))}${span?' – '+esc(readingDate(data.at(-1))):''}<br>${data.length} recorded measurements · ${hasRange?`<span style="color:#8cdda2">${range.min===range.max?'Dashed green line':'Shaded green band'}: target ${esc(rangeLabel)}</span>`:'Target range not set'} · Orange points: outside target.<br>Manual tests and automatic GHL recordings · GHL history: last 30 days. Change targets in Settings.</div>`;
+  svg=`<div class="chartCanvas"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(TYPES[metric].label)} trend chart with ${data.length} readings; target range ${esc(rangeLabel)}"><desc>Green shading shows the configured target range. Orange points are outside it.</desc>${grid}${band}${waterMarkers}<polyline points="${coords}" stroke="#54d9ce" fill="none" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round"/>${data.map((r,i)=>{const outside=hasRange&&(Number(r.value)<range.min||Number(r.value)>range.max);return `<circle cx="${x(i)}" cy="${y(Number(r.value))}" r="3.6" fill="${outside?'#ffb66e':'#a4fff5'}"><title>${nfmt(r.value)} ${esc(r.unit??unit(metric))} · ${esc(readingDate(r))}${outside?' · Outside target':''}</title></circle>`}).join('')}${timeAxis}</svg></div><div class="chartCaption">${esc(readingDate(data[0]))}${span?' – '+esc(readingDate(data.at(-1))):''}<br>${data.length} recorded measurements · ${hasRange?`<span style="color:#8cdda2">${range.min===range.max?'Dashed green line':'Shaded green band'}: target ${esc(rangeLabel)}</span>`:'Target range not set'} · Orange points: outside target.<br>Manual tests and automatic GHL recordings · GHL history: last 30 days. Change targets in Settings.${changes.length?'<br><span style="color:#74baff">Blue markers: logged water changes. Date-only entries shade the whole day.</span>':''}</div>${changeList}`;
  }
- return `<div class="inlineControl" style="margin-bottom:16px"><select id="chartMetric" class="select" aria-label="Chart parameter" style="width:auto;min-width:180px">${options}</select><span class="smallMuted">Manual + GHL recordings</span></div>${svg}`;
+ return chartControls(options)+svg;
 }
 function chemistry(){let arr=recordedReadings().sort((a,b)=>String(b.at).localeCompare(String(a.at)));return heading('Measurements','Record measurements, review trends and compare with your own targets.',button('Import readings','import-measurements')+button('Export CSV','export-csv')+button('+ Record test','new-reading',true))+
  `<section class="panel"><div class="panelHead"><h2>Parameter trends</h2><span class="smallMuted">Manual + GHL · last 30 days of GHL history</span></div>${chartPanel()}</section><section class="panel"><div class="panelHead"><h2>Measurement history</h2><span class="smallMuted">${arr.length} records</span></div>${arr.length?`<div class="tableWrap"><table class="dataTable"><thead><tr><th>Date</th><th>Parameter</th><th>Value</th><th>Target</th><th>Notes</th><th class="right">Actions</th></tr></thead><tbody>${arr.map(r=>`<tr><td>${readingDate(r)}</td><td><b>${esc(TYPES[r.type]?.label||r.type)}</b></td><td>${nfmt(r.value)} ${esc(r.unit??unit(r.type))}</td><td>${badge(r.value,r.type)}</td><td>${esc(r.source==='GHL'?'GHL · automatic recording':r.notes||'—')}</td><td class="right">${r.source==='GHL'?'<span class="smallMuted">GHL · read only</span>':`<div class="rowActions"><button class="miniBtn" data-action="edit-reading" data-id="${attr(r.id)}">Edit</button><button class="miniBtn" data-action="delete-reading" data-id="${attr(r.id)}">Delete</button></div>`}</td></tr>`).join('')}</tbody></table></div>`:empty('Your log is empty','Record a measurement or connect GHL to start tracking water parameters and flow.')}</section>`}
@@ -300,7 +346,7 @@ function mergeImportedReadings(payload){
 
 function importBackup(file,mode='backup'){if(!file)return;if(file.size>5*1024*1024)return alert('File is too large. Maximum backup size is 5 MB.');const reader=new FileReader();reader.onload=()=>{let imported;try{imported=JSON.parse(String(reader.result));if(mode==='measurements'||imported?.format==='reef-command-measurement-import-v1'){mergeImportedReadings(imported);return;}if(!valid(imported))throw Error('This is not a compatible Reef Command v1 backup.');for(const c of ['readings','tasks','equipment','livestock','activities'])if(imported[c].length>100000)throw Error('Backup contains too many records.');}catch(err){return alert('Could not import: '+err.message)}if(!confirm('Restore this backup? This REPLACES all records currently saved on this device. Download a backup first if you wish to retain them.'))return;const previous=db;db=imported;if(save()){page='dashboard';render();toast('Backup restored')}else db=previous;};reader.onerror=()=>alert('Could not read selected file.');reader.readAsText(file)}
 function toast(message){const host=document.getElementById('toastHost');host.innerHTML=`<div class="toast" role="status">${esc(message)}</div>`;clearTimeout(toast.timer);toast.timer=setTimeout(()=>host.innerHTML='',2600)}
-function handleAction(action,rid){if(action==='close-modal'){closeModal();return}if(action==='new-reading'){showModal('reading');return}if(action==='new-task'){showModal('task');return}if(action==='new-activity'){showModal('activity');return}if(action==='new-equipment'){showModal('equipment');return}if(action==='new-livestock'){showModal('livestock');return}
+function handleAction(action,rid){if(action==='chart-zoom-in'){changeChartWindow(.5);return}if(action==='chart-zoom-out'){changeChartWindow(2);return}if(action==='chart-earlier'){changeChartWindow(1,-.5);return}if(action==='chart-later'){changeChartWindow(1,.5);return}if(action==='close-modal'){closeModal();return}if(action==='new-reading'){showModal('reading');return}if(action==='new-task'){showModal('task');return}if(action==='new-activity'){showModal('activity');return}if(action==='new-equipment'){showModal('equipment');return}if(action==='new-livestock'){showModal('livestock');return}
  if(action.startsWith('edit-')){showModal(action.slice(5),rid);return}
  if(action.startsWith('delete-')){const kind=action.slice(7),cfg=MODES[kind];if(!cfg)return;if(!confirm('Permanently delete this record?'))return;db[cfg.collection]=db[cfg.collection].filter(x=>x.id!==rid);if(save()){render();toast('Record deleted')}return}
  if(action==='finish-task'){finishTask(rid);return}
@@ -314,7 +360,7 @@ function handleAction(action,rid){if(action==='close-modal'){closeModal();return
 }
 document.addEventListener('click',e=>{const nav=e.target.closest('[data-nav]');if(nav){page=nav.dataset.nav;render();window.scrollTo(0,0);return}const el=e.target.closest('[data-action]');if(el){handleAction(el.dataset.action,el.dataset.id||'');return}if(e.target.matches('.modalBackdrop'))closeModal()});
 document.addEventListener('submit',e=>{if(e.target.id==='editForm'){e.preventDefault();submitEdit(e.target)}else if(e.target.id==='settingsForm'||e.target.id==='targetsForm')e.preventDefault()});
-document.addEventListener('change',e=>{if(e.target.id==='chartMetric'){metric=e.target.value;render()}else if(e.target.id==='taskFilter'){taskFilter=e.target.value;render()}else if(e.target.id==='importFile'){importBackup(e.target.files?.[0],e.target.dataset.mode||'backup');e.target.value=''}});
+document.addEventListener('change',e=>{if(e.target.id==='chartPeriod'){chartPeriod=e.target.value;if(chartPeriod==='custom'&&(!chartStart||!chartEnd)){chartStart=localDateTime(new Date(Date.now()-7*86400000));chartEnd=localDateTime();}render()}else if(e.target.id==='chartSource'){chartSource=e.target.value;render()}else if(e.target.id==='chartStart'||e.target.id==='chartEnd'){if(e.target.id==='chartStart')chartStart=e.target.value;else chartEnd=e.target.value;render()}else if(e.target.id==='chartMarkers'){chartMarkers=e.target.checked;render()}else if(e.target.id==='chartMetric'){metric=e.target.value;render()}else if(e.target.id==='taskFilter'){taskFilter=e.target.value;render()}else if(e.target.id==='importFile'){importBackup(e.target.files?.[0],e.target.dataset.mode||'backup');e.target.value=''}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('modalHost').innerHTML)closeModal()});
 document.getElementById('quickBackup').addEventListener('click',exportBackup);
 if(ensureServiceSchedule(db))save();
