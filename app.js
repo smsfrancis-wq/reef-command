@@ -117,28 +117,65 @@ function dashboard(){let due=dueTasks(),a=recentActivities(5),last=recordedReadi
  `<div class="metrics">${cards()}</div><div class="cols"><div><section class="panel"><div class="panelHead"><h2>Measurement trends</h2><button class="miniBtn" data-nav="chemistry">All measurements</button></div>${chartPanel()}</section><section class="panel"><div class="panelHead"><h2>Recent measurements</h2><button class="miniBtn" data-action="new-reading">+ Add</button></div>${last.length?`<div class="tableWrap"><table class="dataTable"><thead><tr><th>Parameter</th><th>Result</th><th>Recorded</th></tr></thead><tbody>${last.map(r=>`<tr><td><b>${esc(TYPES[r.type]?.label||r.type)}</b></td><td>${nfmt(r.value)} ${esc(r.unit??unit(r.type))}</td><td>${readingDate(r)}</td></tr>`).join('')}</tbody></table></div>`:empty('No measurements yet','Start by recording your latest results.')}</section></div>
  <div><section class="panel"><div class="panelHead"><h2>Maintenance due</h2><button class="miniBtn" data-nav="maintenance">View all</button></div>${due.length?due.slice(0,6).map(t=>`<div class="statRow"><div><b>${esc(t.name)}</b><div class="meta">${t.next<localDate()?'Overdue':'Due today'} · ${formatDate(t.next)}</div></div><button class="miniBtn" data-action="finish-task" data-id="${attr(t.id)}">Complete</button></div>`).join(''):empty('Nothing overdue','Your scheduled tasks are up to date.')}</section><section class="panel"><div class="panelHead"><h2>Activity log</h2><button class="miniBtn" data-nav="maintenance">View log</button></div>${a.length?a.map(x=>`<div class="statRow"><div><b>${esc(x.type)}</b><div class="meta">${formatDate(x.date)} · ${esc(x.notes||'No notes')}</div></div>${x.litres?`<b>${nfmt(x.litres)} L</b>`:''}</div>`).join(''):empty('No activity yet','Log maintenance, NSW deliveries or water changes.')}</section><div class="noteBox">Back up regularly. Local edits work offline; cloud sync requires owner sign-in and network access.</div></div></div>`}
 
+
+const CHART_AXES={
+ temperature:{step:.25,dp:1,maxTicks:12},salinity:{step:.5,dp:1},ph:{step:.1,dp:1},
+ alkalinity:{step:.5,dp:1},calcium:{step:10,dp:0},magnesium:{step:50,dp:0},
+ nitrate:{step:1,dp:0},phosphate:{step:.05,dp:2},ammonia:{step:.25,dp:2},nitrite:{step:.25,dp:2},
+ redox:{step:25,dp:0},conductivity:{step:.5,dp:1},flow:{step:100,dp:0},
+ reefrun_1_flow:{step:100,dp:0},uv_branch_flow:{step:100,dp:0},reefrun_2_flow:{step:100,dp:0}
+};
+function chartAxis(type,min,max){
+ const cfg=CHART_AXES[type]||{step:1,dp:0};
+ const padding=Math.max((max-min)*.08,cfg.step*.4);
+ const lower=min>=0?Math.max(0,min-padding):min-padding,upper=max+padding;
+ const steps=new Set([cfg.step]);
+ for(let exponent=-6;exponent<=15;exponent++)for(const factor of [1,2,2.5,5]){
+  const step=factor*10**exponent;
+  if(step>=cfg.step&&Math.abs(step/cfg.step-Math.round(step/cfg.step))<1e-6)steps.add(step);
+ }
+ const limit=cfg.maxTicks||8;
+ let step=[...steps].sort((a,b)=>a-b).find(v=>Math.ceil(upper/v-1e-9)-Math.floor(lower/v+1e-9)+1<=limit);
+ if(!step)step=Math.max(cfg.step,(upper-lower)/5);
+ const loIndex=Math.floor(lower/step+1e-9),hiIndex=Math.ceil(upper/step-1e-9);
+ const low=Number((loIndex*step).toPrecision(12)),high=Number((hiIndex*step).toPrecision(12));
+ let dp=cfg.dp;
+ while(dp<6&&Math.abs(step*10**dp-Math.round(step*10**dp))>1e-6)dp++;
+ const ticks=Array.from({length:hiIndex-loIndex+1},(_,i)=>Number(((loIndex+i)*step).toPrecision(12)));
+ const label=value=>value.toLocaleString('en-GB',{minimumFractionDigits:dp,maximumFractionDigits:dp});
+ return {low,high,step,ticks,label};
+}
+function chartTimeLabel(timestamp,span){
+ const opts=span<=2*86400000?{hour:'2-digit',minute:'2-digit'}:span>300*86400000?{day:'numeric',month:'short',year:'2-digit'}:{day:'numeric',month:'short'};
+ return new Intl.DateTimeFormat('en-GB',opts).format(new Date(timestamp));
+}
+
 function chartPanel(){
  const options=Object.entries(TYPES).map(([k,t])=>`<option value="${k}" ${metric===k?'selected':''}>${esc(t.label)}</option>`).join('');
- const data=recordedReadings().filter(r=>r.type===metric&&r.value!==null&&Number.isFinite(Number(r.value))).sort((a,b)=>String(a.at).localeCompare(String(b.at)));
+ const data=recordedReadings().filter(r=>r.type===metric&&r.value!==null&&Number.isFinite(Number(r.value))&&Number.isFinite(Date.parse(r.at))).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
  const range=db.settings.targets?.[metric]||TYPES[metric];
  const hasRange=typeof range?.min==='number'&&typeof range?.max==='number'&&Number.isFinite(range.min)&&Number.isFinite(range.max)&&range.min<=range.max;
  const rangeLabel=hasRange?`${nfmt(range.min)}–${nfmt(range.max)} ${unit(metric)}`.trim():'Not set';
  let svg;
  if(!data.length)svg=empty('No readings to chart',`Log ${TYPES[metric].label.toLowerCase()} to create a trend.`);
  else{
-  const W=660,H=230,L=49,R=14,T=16,B=35;
+  const W=660,H=260,L=65,R=18,T=16,B=40;
   const vals=data.map(r=>Number(r.value));
   // Include the whole target band as well as every actual reading in the scale.
   const mins=Math.min(...vals,...(hasRange?[range.min]:[])),maxs=Math.max(...vals,...(hasRange?[range.max]:[]));
-  const padding=Math.max(maxs-mins,Math.max(Math.abs(maxs),1)*.07,.05)*.16;
-  const low=mins>=0?Math.max(0,mins-padding):mins-padding,high=maxs+padding;
-  const x=i=>L+(W-L-R)*(data.length===1?.5:i/(data.length-1));
+
+  const axis=chartAxis(metric,mins,maxs),{low,high}=axis;
+  const first=Date.parse(data[0].at),last=Date.parse(data.at(-1).at),span=last-first;
+  const timeX=t=>L+(W-L-R)*(span?(t-first)/span:.5);
+  const x=i=>timeX(Date.parse(data[i].at));
   const y=v=>T+(H-T-B)*(high-v)/(high-low);
   const coords=data.map((r,i)=>`${x(i)},${y(Number(r.value))}`).join(' ');
-  const grid=[0,.25,.5,.75,1].map(p=>{const vy=low+(high-low)*(1-p),yy=T+p*(H-T-B);return `<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="#27404d" stroke-dasharray="3 5"/><text x="${L-9}" y="${yy+4}" text-anchor="end" fill="#96abba" font-size="11">${nfmt(vy)}</text>`}).join('');
+  const grid=axis.ticks.map(v=>`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="#27404d" stroke-dasharray="3 5"/><text class="yTick" x="${L-9}" y="${y(v)+4}" text-anchor="end" fill="#96abba" font-size="11">${axis.label(v)}</text>`).join('');
+  const timeTicks=span?[0,1/3,2/3,1].map(f=>first+span*f):[first];
+  const timeAxis=timeTicks.map((t,i)=>`<text class="xTick" x="${timeX(t)}" y="${H-12}" text-anchor="${timeTicks.length===1?'middle':i===0?'start':i===timeTicks.length-1?'end':'middle'}" fill="#96abba" font-size="11">${esc(chartTimeLabel(t,span))}</text>`).join('');
   const boundaries=hasRange?[...new Set([range.min,range.max])].map(v=>`<line class="targetBoundary" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="#8cdda2" stroke-width="1.2" stroke-dasharray="5 4"/>`).join(''):'';
   const band=hasRange?`<g class="targetRange"><title>Target range ${esc(rangeLabel)}</title>${range.max>range.min?`<rect class="targetBand" x="${L}" y="${y(range.max)}" width="${W-L-R}" height="${y(range.min)-y(range.max)}" fill="#70ce91" fill-opacity="0.14"/>`:''}${boundaries}</g>`:'';
-  svg=`<div class="chartCanvas"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(TYPES[metric].label)} trend chart with ${data.length} readings; target range ${esc(rangeLabel)}"><desc>Green shading shows the configured target range. Orange points are outside it.</desc>${grid}${band}<polyline points="${coords}" stroke="#54d9ce" fill="none" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round"/>${data.map((r,i)=>{const outside=hasRange&&(Number(r.value)<range.min||Number(r.value)>range.max);return `<circle cx="${x(i)}" cy="${y(Number(r.value))}" r="3.6" fill="${outside?'#ffb66e':'#a4fff5'}"><title>${nfmt(r.value)} ${esc(r.unit??unit(metric))} · ${esc(readingDate(r))}${outside?' · Outside target':''}</title></circle>`}).join('')}<text x="${L}" y="${H-4}" fill="#96abba" font-size="11">${formatShort(data[0].at)}</text><text x="${W-R}" y="${H-4}" text-anchor="end" fill="#96abba" font-size="11">${formatShort(data[data.length-1].at)}</text></svg></div><div class="chartCaption">${data.length} recorded measurements · ${hasRange?`<span style="color:#8cdda2">${range.min===range.max?'Dashed green line':'Shaded green band'}: target ${esc(rangeLabel)}</span>`:'Target range not set'} · Orange points: outside target.<br>Manual tests and automatic GHL recordings · GHL history: last 30 days. Change targets in Settings.</div>`;
+  svg=`<div class="chartCanvas"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(TYPES[metric].label)} trend chart with ${data.length} readings; target range ${esc(rangeLabel)}"><desc>Green shading shows the configured target range. Orange points are outside it.</desc>${grid}${band}<polyline points="${coords}" stroke="#54d9ce" fill="none" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round"/>${data.map((r,i)=>{const outside=hasRange&&(Number(r.value)<range.min||Number(r.value)>range.max);return `<circle cx="${x(i)}" cy="${y(Number(r.value))}" r="3.6" fill="${outside?'#ffb66e':'#a4fff5'}"><title>${nfmt(r.value)} ${esc(r.unit??unit(metric))} · ${esc(readingDate(r))}${outside?' · Outside target':''}</title></circle>`}).join('')}${timeAxis}</svg></div><div class="chartCaption">${esc(readingDate(data[0]))}${span?' – '+esc(readingDate(data.at(-1))):''}<br>${data.length} recorded measurements · ${hasRange?`<span style="color:#8cdda2">${range.min===range.max?'Dashed green line':'Shaded green band'}: target ${esc(rangeLabel)}</span>`:'Target range not set'} · Orange points: outside target.<br>Manual tests and automatic GHL recordings · GHL history: last 30 days. Change targets in Settings.</div>`;
  }
  return `<div class="inlineControl" style="margin-bottom:16px"><select id="chartMetric" class="select" aria-label="Chart parameter" style="width:auto;min-width:180px">${options}</select><span class="smallMuted">Manual + GHL recordings</span></div>${svg}`;
 }
