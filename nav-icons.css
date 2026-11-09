@@ -1,0 +1,60 @@
+/* Reef Command v2.3.1 — clear, large icons in the mobile navigation. */
+.navIcon svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 790px) {
+  .mobileNav {
+    height: calc(76px + env(safe-area-inset-bottom));
+    padding: 7px 5px calc(7px + env(safe-area-inset-bottom));
+    gap: 2px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .mobileNav button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: row;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 48px;
+    height: 56px;
+    margin: 0;
+    padding: 6px 0;
+    gap: 0;
+    border-radius: 12px;
+    font-size: 0 !important;
+    line-height: 0;
+    letter-spacing: 0;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .mobileNav button .navIcon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    font-size: 0 !important;
+    opacity: 1;
+    line-height: 0;
+  }
+  .mobileNav button .navIcon svg {
+    width: 29px;
+    height: 29px;
+    stroke-width: 1.9;
+  }
+  .mobileNav button.active {
+    color: var(--teal, #54d9ce);
+    background: #173c46;
+  }
+  .mobileNav button:focus-visible {
+    outline: 2px solid var(--teal, #54d9ce);
+    outline-offset: -2px;
+  }
+}
